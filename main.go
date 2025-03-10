@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type ArchiveFile struct {
@@ -30,6 +31,11 @@ func main() {
 	err = os.WriteFile("duplicates.json", duplicatesJson, 0666)
 	if err != nil {
 		panic(err)
+	}
+
+	if len(os.Args) == 3 {
+		fmt.Printf("Moving duplicate files from %s to %s\n", os.Args[1], os.Args[2])
+		MoveFiles(os.Args[1], os.Args[2], duplicates)
 	}
 }
 
@@ -83,4 +89,37 @@ func hashFile(path string) (string, error) {
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func DeleteFiles(files []ArchiveFile) error {
+	for _, file := range files {
+		err := os.Remove(file.Path)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func MoveFiles(sourceRoot, destinationRoot string, files []ArchiveFile) error {
+	sourceLen := len(sourceRoot)
+
+	for _, file := range files {
+		if !strings.HasPrefix(file.Path, sourceRoot) {
+			return fmt.Errorf("file %s is not in the expected %s path", file.Path, sourceRoot)
+		}
+
+		newPath := filepath.Join(destinationRoot, file.Path[sourceLen:])
+		err := os.MkdirAll(filepath.Dir(newPath), 0755)
+		if err != nil {
+			return err
+		}
+		err = os.Rename(file.Path, newPath)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
