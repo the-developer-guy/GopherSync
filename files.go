@@ -15,6 +15,76 @@ type ArchiveFile struct {
 	Hash string `json:",string"`
 }
 
+func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string) {
+
+	filesToArchive := []ArchiveFile{}
+
+	filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			h, err := hashFile(path)
+			if err != nil {
+				return err
+			}
+
+			_, exists := archivedFiles[h]
+			if !exists {
+				af := ArchiveFile{
+					Path: path,
+					Hash: h,
+				}
+				filesToArchive = append(filesToArchive, af)
+			}
+		}
+		return nil
+	})
+
+	for _, file := range filesToArchive {
+		err := copyFile(sourceRoot, destinationRoot, &file)
+		if err != nil {
+			fmt.Printf("Error copying file %s: %v\n", file.Path, err)
+			continue
+		}
+		archivedFiles[file.Hash] = file.Path
+	}
+}
+
+func copyFile(sourceRoot, destinationRoot string, file *ArchiveFile) error {
+	sourceLen := len(sourceRoot)
+
+	if !strings.HasPrefix(file.Path, sourceRoot) {
+		return fmt.Errorf("file %s is not in the expected %s path", file.Path, sourceRoot)
+	}
+
+	newPath := filepath.Join(destinationRoot, file.Path[sourceLen:])
+	err := os.MkdirAll(filepath.Dir(newPath), 0755)
+	if err != nil {
+		return err
+	}
+
+	sourceFile, err := os.Open(file.Path)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destinationFile, err := os.Create(newPath)
+	if err != nil {
+		return err
+	}
+	defer destinationFile.Close()
+
+	_, err = io.Copy(destinationFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func Deduplicate() {
 
 	uniqueFiles, allFiles, duplicates := collectFiles(os.Args[1])
