@@ -47,10 +47,16 @@ func StoreStatefile(path string, archivedFiles map[string]string) error {
 func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string) {
 
 	filesToArchive := []ArchiveFile{}
+	counter := 0
 
 	filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+		if err != nil && !os.IsPermission(err) {
 			return err
+		}
+
+		if strings.HasPrefix(info.Name(), ".") {
+			// skip hidden files
+			return nil
 		}
 
 		if !info.IsDir() {
@@ -66,10 +72,29 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 					Hash: h,
 				}
 				filesToArchive = append(filesToArchive, af)
+				counter++
+				if counter == 100 {
+					fmt.Print("|")
+				} else if counter == 200 {
+					fmt.Print("/")
+				} else if counter == 300 {
+					fmt.Print("-")
+				} else if counter == 400 {
+					fmt.Print("\\")
+				} else if counter == 500 {
+					fmt.Print("-")
+					counter = 0
+				}
 			}
 		}
 		return nil
 	})
+
+	fileCount := len(filesToArchive)
+	fmt.Printf("\n\n%d files collected", fileCount)
+	percent := fileCount / 100
+	progress := 0
+	progressCounter := 0
 
 	for _, file := range filesToArchive {
 		err := copyFile(sourceRoot, destinationRoot, &file)
@@ -78,6 +103,12 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 			continue
 		}
 		archivedFiles[file.Hash] = file.Path
+		progress++
+		if progress == percent {
+			progress = 0
+			progressCounter++
+			fmt.Printf("%d%%\n", progressCounter)
+		}
 	}
 }
 
