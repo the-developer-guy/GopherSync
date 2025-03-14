@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// Current limit: 100 MB
+// Files under this size will read into RAM
+const SMALL_FILE_SIZE = 1024 * 1024 * 100
 
 type ArchiveFile struct {
 	Path string `json:",string"`
@@ -47,6 +52,8 @@ func StoreStatefile(path string, archivedFiles map[string]string) error {
 func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string) {
 
 	filesToArchive := []ArchiveFile{}
+	fileSizes := []int64{}
+	sourceLen := len(sourceRoot)
 	counter := 0
 
 	filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
@@ -60,6 +67,38 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 		}
 
 		if !info.IsDir() {
+			fileSizes = append(fileSizes, info.Size())
+			if info.Size() < SMALL_FILE_SIZE {
+				// small file, read into memory
+				filecontent, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				h := sha256.New()
+				_, err = io.Copy(h, bytes.NewReader(filecontent))
+				if err != nil {
+					return err
+				}
+
+				hash := fmt.Sprintf("%x", h.Sum(nil))
+				_, exists := archivedFiles[hash]
+				if exists {
+					return nil
+				}
+
+				newPath := filepath.Join(destinationRoot, path[sourceLen:])
+				err = os.MkdirAll(filepath.Dir(newPath), 0755)
+				if err != nil {
+					return err
+				}
+				err = os.WriteFile(newPath, filecontent, info.Mode().Perm())
+				if err != nil {
+					return err
+				}
+				archivedFiles[hash] = path
+				return nil
+			}
+
 			h, err := hashFile(path)
 			if err != nil {
 				return err
@@ -91,7 +130,7 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 	})
 
 	fileCount := len(filesToArchive)
-	fmt.Printf("\n\n%d files collected", fileCount)
+	fmt.Printf("\n\n%d big files collected", fileCount)
 	percent := fileCount / 100
 	progress := 0
 	progressCounter := 0
