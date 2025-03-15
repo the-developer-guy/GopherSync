@@ -6,9 +6,15 @@ import (
 )
 
 func main() {
-	fmt.Println("Deduplicating files")
-	if len(os.Args) < 2 {
-		panic("Please provide at least the folder you want to deduplicate!")
+	if len(os.Args) != 4 {
+		fmt.Println("Usage: gosync sourceRoot duplicateBackupRoot statefilePath")
+		os.Exit(1)
 	}
 
+	uniqueFiles, err := Deduplicate(os.Args[1], os.Args[2])
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	StoreStatefile(os.Args[3], uniqueFiles)
 }

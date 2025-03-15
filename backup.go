@@ -1,21 +1,20 @@
 package main
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string) {
+// Back up the source directory to the destination directory
+// using the archivedFiles map to avoid copying files that have
+// already been copied.
+func Backup(sourceRoot, destinationRoot string,
+	archivedFiles map[string]string) {
 
 	filesToArchive := []ArchiveFile{}
-
 	sourceLen := len(sourceRoot)
-	counter := 0
 
 	size, _ := GetSourceSize(sourceRoot)
 	fmt.Printf("Source size: %s\n", ByteConverter(size))
@@ -34,27 +33,22 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 		}
 
 		if !info.IsDir() {
-			processedFileSize += info.Size()
-			p := int((processedFileSize * 100) / size)
-			if p > percent {
-				percent = p
-				fmt.Printf("%d%%\n", percent)
-			}
-
 			if info.Size() < SMALL_FILE_SIZE {
+
+				processedFileSize += info.Size()
+				p := int((processedFileSize * 100) / size)
+				if p > percent {
+					percent = p
+					fmt.Printf("%d%%\n", percent)
+				}
+
 				// small file, read into memory
 				filecontent, err := os.ReadFile(path)
 				if err != nil {
 					return err
 				}
-				h := sha256.New()
-				_, err = io.Copy(h, bytes.NewReader(filecontent))
-				if err != nil {
-					return err
-				}
-
-				hash := fmt.Sprintf("%x", h.Sum(nil))
-				_, exists := archivedFiles[hash]
+				h, _ := HashBytes(filecontent)
+				_, exists := archivedFiles[h]
 				if exists {
 					return nil
 				}
@@ -68,7 +62,7 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 				if err != nil {
 					return err
 				}
-				archivedFiles[hash] = path
+				archivedFiles[h] = path
 				return nil
 			}
 
@@ -84,29 +78,14 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 					Hash: h,
 				}
 				filesToArchive = append(filesToArchive, af)
-				counter++
-				if counter == 100 {
-					fmt.Print("|")
-				} else if counter == 200 {
-					fmt.Print("/")
-				} else if counter == 300 {
-					fmt.Print("-")
-				} else if counter == 400 {
-					fmt.Print("\\")
-				} else if counter == 500 {
-					fmt.Print("-")
-					counter = 0
-				}
 			}
 		}
 		return nil
 	})
 
-	fileCount := len(filesToArchive)
-	fmt.Printf("\n\n%d big files collected", fileCount)
-	percent = fileCount / 100
-	progress := 0
-	progressCounter := 0
+	bigFileCount := len(filesToArchive)
+	fmt.Printf("\n\n%d big files collected", bigFileCount)
+	processedBigFileCount := 0
 
 	for _, file := range filesToArchive {
 		err := CopyFile(sourceRoot, destinationRoot, &file)
@@ -115,11 +94,8 @@ func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string)
 			continue
 		}
 		archivedFiles[file.Hash] = file.Path
-		progress++
-		if progress == percent {
-			progress = 0
-			progressCounter++
-			fmt.Printf("%d%%\n", progressCounter)
-		}
+
+		processedBigFileCount++
+		fmt.Printf("%.1f%%\n", float64(processedBigFileCount*100)/float64(bigFileCount))
 	}
 }

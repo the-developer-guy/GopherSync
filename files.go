@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Current limit: 1 GiB
@@ -41,7 +42,7 @@ func GetSourceSize(sourceRoot string) (int64, error) {
 }
 
 // Create statiscs file with the size of all files in the source directory
-func FieSizeStatiscs(sourceRoot, resultFile string) error {
+func FileSizeStatiscs(sourceRoot, resultFile string) error {
 
 	fileSizes := []int64{}
 
@@ -111,38 +112,61 @@ func CopyFile(sourceRoot, destinationRoot string, file *ArchiveFile) error {
 
 // Collect duplicate files in the source directory
 func CollectDuplicates(rootPath string, uniqueFiles map[string]string) ([]ArchiveFile, error) {
-	files := []ArchiveFile{}
 	duplicates := []ArchiveFile{}
+	fileChan := make(chan string, 1000)
+	hashChan := make(chan ArchiveFile, 1000)
+	var wg sync.WaitGroup
 
-	filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	for _ = range 10 {
+		wg.Add(1)
+		go hashFile(fileChan, hashChan, &wg)
+	}
 
-		if !info.IsDir() {
-			h, err := HashFile(path)
+	go func() {
+		filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 
-			af := ArchiveFile{
-				Path: path,
-				Hash: h,
+			if !info.IsDir() {
+				fileChan <- path
 			}
-			files = append(files, af)
+			return nil
+		})
 
-			_, ok := uniqueFiles[h]
-			if ok {
-				duplicates = append(duplicates, af)
-			} else {
-				uniqueFiles[h] = path
-			}
+		close(fileChan)
+	}()
 
+	go func() {
+		wg.Wait()
+		close(hashChan)
+	}()
+
+	for af := range hashChan {
+		if _, ok := uniqueFiles[af.Hash]; ok {
+			duplicates = append(duplicates, af)
+		} else {
+			uniqueFiles[af.Hash] = af.Path
 		}
-		return nil
-	})
+	}
 
 	return duplicates, nil
+}
+
+func hashFile(fileChan chan string, hashChan chan ArchiveFile, wg *sync.WaitGroup) {
+	for path := range fileChan {
+		h, err := HashFile(path)
+		if err != nil {
+			return
+		}
+
+		hashChan <- ArchiveFile{
+			Path: path,
+			Hash: h,
+		}
+	}
+
+	wg.Done()
 }
 
 func HashFile(path string) (string, error) {
