@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,147 +10,73 @@ import (
 	"strings"
 )
 
-// Current limit: 100 MB
-// Files under this size will read into RAM
-const SMALL_FILE_SIZE = 1024 * 1024 * 100
+// Current limit: 1 GiB
+// Files under this size will read into RAM.
+// In my sample, over 99% of files are under 1 GiB
+const SMALL_FILE_SIZE = 1024 * 1024 * 1024
 
 type ArchiveFile struct {
 	Path string `json:",string"`
 	Hash string `json:",string"`
 }
 
-func LoadStatefile(path string) (map[string]string, error) {
-	statefile, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	archivedFiles := map[string]string{}
-	err = json.Unmarshal(statefile, &archivedFiles)
-	if err != nil {
-		return nil, err
-	}
-
-	return archivedFiles, nil
-}
-
-func StoreStatefile(path string, archivedFiles map[string]string) error {
-	statefileJson, err := json.Marshal(archivedFiles)
-	if err != nil {
-		return err
-	}
-
-	err = os.WriteFile(path, statefileJson, 0666)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func Backup(sourceRoot, destinationRoot string, archivedFiles map[string]string) {
-
-	filesToArchive := []ArchiveFile{}
-	fileSizes := []int64{}
-	sourceLen := len(sourceRoot)
-	counter := 0
+// Returns the size of the source directory in bytes
+func GetSourceSize(sourceRoot string) (int64, error) {
+	var size int64
 
 	filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil && !os.IsPermission(err) {
-			return err
+			fmt.Println(err.Error())
+			return nil
 		}
 
-		if strings.HasPrefix(info.Name(), ".") {
-			// skip hidden files
+		if !info.IsDir() {
+			size += info.Size()
+		}
+
+		return nil
+	})
+
+	return size, nil
+}
+
+// Create statiscs file with the size of all files in the source directory
+func FieSizeStatiscs(sourceRoot, resultFile string) error {
+
+	fileSizes := []int64{}
+
+	filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil && !os.IsPermission(err) {
+			fmt.Println(err.Error())
 			return nil
 		}
 
 		if !info.IsDir() {
 			fileSizes = append(fileSizes, info.Size())
-			if info.Size() < SMALL_FILE_SIZE {
-				// small file, read into memory
-				filecontent, err := os.ReadFile(path)
-				if err != nil {
-					return err
-				}
-				h := sha256.New()
-				_, err = io.Copy(h, bytes.NewReader(filecontent))
-				if err != nil {
-					return err
-				}
-
-				hash := fmt.Sprintf("%x", h.Sum(nil))
-				_, exists := archivedFiles[hash]
-				if exists {
-					return nil
-				}
-
-				newPath := filepath.Join(destinationRoot, path[sourceLen:])
-				err = os.MkdirAll(filepath.Dir(newPath), 0755)
-				if err != nil {
-					return err
-				}
-				err = os.WriteFile(newPath, filecontent, info.Mode().Perm())
-				if err != nil {
-					return err
-				}
-				archivedFiles[hash] = path
-				return nil
-			}
-
-			h, err := hashFile(path)
-			if err != nil {
-				return err
-			}
-
-			_, exists := archivedFiles[h]
-			if !exists {
-				af := ArchiveFile{
-					Path: path,
-					Hash: h,
-				}
-				filesToArchive = append(filesToArchive, af)
-				counter++
-				if counter == 100 {
-					fmt.Print("|")
-				} else if counter == 200 {
-					fmt.Print("/")
-				} else if counter == 300 {
-					fmt.Print("-")
-				} else if counter == 400 {
-					fmt.Print("\\")
-				} else if counter == 500 {
-					fmt.Print("-")
-					counter = 0
-				}
-			}
 		}
+
 		return nil
 	})
 
-	fileCount := len(filesToArchive)
-	fmt.Printf("\n\n%d big files collected", fileCount)
-	percent := fileCount / 100
-	progress := 0
-	progressCounter := 0
+	file, err := os.Create(resultFile)
+	if err != nil {
+		fmt.Printf("Error creating %s: %v\n", resultFile, err)
+		return err
+	}
+	defer file.Close()
 
-	for _, file := range filesToArchive {
-		err := copyFile(sourceRoot, destinationRoot, &file)
+	for _, size := range fileSizes {
+		_, err := fmt.Fprintln(file, size)
 		if err != nil {
-			fmt.Printf("Error copying file %s: %v\n", file.Path, err)
-			continue
-		}
-		archivedFiles[file.Hash] = file.Path
-		progress++
-		if progress == percent {
-			progress = 0
-			progressCounter++
-			fmt.Printf("%d%%\n", progressCounter)
+			break
 		}
 	}
+
+	return nil
 }
 
-func copyFile(sourceRoot, destinationRoot string, file *ArchiveFile) error {
+// Copy a file, even if it's on a different volume.
+func CopyFile(sourceRoot, destinationRoot string, file *ArchiveFile) error {
 	sourceLen := len(sourceRoot)
 
 	if !strings.HasPrefix(file.Path, sourceRoot) {
@@ -184,47 +109,18 @@ func copyFile(sourceRoot, destinationRoot string, file *ArchiveFile) error {
 	return nil
 }
 
-func Deduplicate() {
-
-	uniqueFiles, allFiles, duplicates := collectFiles(os.Args[1])
-	fmt.Printf("%d unique files and %d files in root path\n", len(uniqueFiles), len(allFiles))
-
-	statefileJson, err := json.Marshal(uniqueFiles)
-	if err != nil {
-		panic(err)
-	}
-	err = os.WriteFile("/Volumes/Master/statefile.json", statefileJson, 0666)
-	if err != nil {
-		panic(err)
-	}
-
-	duplicatesJson, err := json.Marshal(duplicates)
-	if err != nil {
-		panic(err)
-	}
-	err = os.WriteFile("duplicates.json", duplicatesJson, 0666)
-	if err != nil {
-		panic(err)
-	}
-
-	if len(os.Args) == 3 {
-		fmt.Printf("Moving duplicate files from %s to %s\n", os.Args[1], os.Args[2])
-		MoveFiles(os.Args[1], os.Args[2], duplicates)
-	}
-}
-
-func collectFiles(path string) (map[string]string, []ArchiveFile, []ArchiveFile) {
-	uniqueFiles := map[string]string{}
+// Collect duplicate files in the source directory
+func CollectDuplicates(rootPath string, uniqueFiles map[string]string) ([]ArchiveFile, error) {
 	files := []ArchiveFile{}
 	duplicates := []ArchiveFile{}
 
-	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if !info.IsDir() {
-			h, err := hashFile(path)
+			h, err := HashFile(path)
 			if err != nil {
 				return err
 			}
@@ -246,10 +142,10 @@ func collectFiles(path string) (map[string]string, []ArchiveFile, []ArchiveFile)
 		return nil
 	})
 
-	return uniqueFiles, files, duplicates
+	return duplicates, nil
 }
 
-func hashFile(path string) (string, error) {
+func HashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -263,6 +159,17 @@ func hashFile(path string) (string, error) {
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func HashBytes(data []byte) (string, error) {
+	h := sha256.New()
+	_, err := io.Copy(h, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+
+	hash := fmt.Sprintf("%x", h.Sum(nil))
+	return hash, nil
 }
 
 func DeleteFiles(files []ArchiveFile) error {
@@ -296,4 +203,19 @@ func MoveFiles(sourceRoot, destinationRoot string, files []ArchiveFile) error {
 	}
 
 	return nil
+}
+
+// Convert bytes to 2-digit resolution string
+func ByteConverter(bytes int64) string {
+	if bytes > 1024*1024*1024*1024 {
+		return fmt.Sprintf("%.2f TiB", float64(bytes)/1024/1024/1024/1024)
+	} else if bytes > 1024*1024*1024 {
+		return fmt.Sprintf("%.2f GiB", float64(bytes)/1024/1024/1024)
+	} else if bytes > 1024*1024 {
+		return fmt.Sprintf("%.2f MiB", float64(bytes)/1024/1024)
+	} else if bytes > 1024 {
+		return fmt.Sprintf("%.2f KiB", float64(bytes)/1024)
+	} else {
+		return fmt.Sprintf("%d bytes", bytes)
+	}
 }
