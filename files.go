@@ -124,7 +124,7 @@ func CollectDuplicates(rootPath string, uniqueFiles map[string]string) ([]Archiv
 
 	go func() {
 		filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
+			if err != nil && !os.IsPermission(err) {
 				return err
 			}
 
@@ -157,7 +157,8 @@ func hashFile(fileChan chan string, hashChan chan ArchiveFile, wg *sync.WaitGrou
 	for path := range fileChan {
 		h, err := HashFile(path)
 		if err != nil {
-			return
+			fmt.Println(err)
+			continue
 		}
 
 		hashChan <- ArchiveFile{
