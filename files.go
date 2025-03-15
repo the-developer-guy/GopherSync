@@ -143,8 +143,10 @@ func CollectDuplicates(rootPath string, uniqueFiles map[string]string) ([]Archiv
 	}()
 
 	for af := range hashChan {
-		if _, ok := uniqueFiles[af.Hash]; ok {
-			duplicates = append(duplicates, af)
+		if filepath, ok := uniqueFiles[af.Hash]; ok {
+			if af.Path != filepath {
+				duplicates = append(duplicates, af)
+			}
 		} else {
 			uniqueFiles[af.Hash] = af.Path
 		}
@@ -210,20 +212,24 @@ func DeleteFiles(files []ArchiveFile) error {
 
 func MoveFiles(sourceRoot, destinationRoot string, files []ArchiveFile) error {
 	sourceLen := len(sourceRoot)
+	fmt.Printf("Moving %d files from %s to %s\n", len(files), sourceRoot, destinationRoot)
 
 	for _, file := range files {
 		if !strings.HasPrefix(file.Path, sourceRoot) {
-			return fmt.Errorf("file %s is not in the expected %s path", file.Path, sourceRoot)
+			fmt.Printf("file %s is not in the expected %s path\n", file.Path, sourceRoot)
+			continue
 		}
 
 		newPath := filepath.Join(destinationRoot, file.Path[sourceLen:])
 		err := os.MkdirAll(filepath.Dir(newPath), 0755)
 		if err != nil {
-			return err
+			fmt.Println(err)
+			continue
 		}
 		err = os.Rename(file.Path, newPath)
 		if err != nil {
-			return err
+			fmt.Println(err)
+			continue
 		}
 	}
 
